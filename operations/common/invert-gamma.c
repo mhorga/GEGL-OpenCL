@@ -30,6 +30,9 @@
 #define GEGL_OP_C_SOURCE invert-gamma.c
 
 #include "gegl-op.h"
+#include "opencl/invert-gamma.cl.h"
+
+static GeglClRunData *cl_data = NULL;
 
 static void
 prepare (GeglOperation *operation)
@@ -71,8 +74,11 @@ gegl_op_class_init (GeglOpClass *klass)
   operation_class    = GEGL_OPERATION_CLASS (klass);
   point_filter_class = GEGL_OPERATION_POINT_FILTER_CLASS (klass);
 
-  operation_class->prepare     = prepare;
-  point_filter_class->process  = process;
+  operation_class->prepare        = prepare;
+  operation_class->opencl_support = TRUE;
+    
+  point_filter_class->process    = process;
+  point_filter_class->cl_process = cl_process;
 
   gegl_operation_class_set_keys (operation_class,
     "name"       , "gegl:invert-gamma",
@@ -82,6 +88,36 @@ gegl_op_class_init (GeglOpClass *klass)
        _("Inverts the components (except alpha), the result is the "
          "corresponding \"negative\" image."),
     NULL);
+}
+
+static gboolean
+cl_process(GeglOperation       *operation,
+           cl_mem              in,
+           cl_mem              out,
+           size_t              global_worksize,
+           const GeglRectangle *roi,
+           gint                level)
+{
+    if (!cl_data)
+    {
+        const char *kernel_name[] = {"cl_invertgamma", NULL};
+        cl_data = gegl_cl_compile_and_build(invert_gamma_cl_source, kernel_name);
+        return TRUE;
+    }
+    else
+    {
+        cl_int cl_err = 0;
+        const size_t global_ws[2] = {global_worksize, 1};
+        cl_err = gegl_cl_set_kernel_args(cl_data->kernel[0], sizeof(cl_mem), in, sizeof(cl_mem), out, NULL);
+        CL_CHECK;
+        cl_err = gegl_clEnqueueNDRangeKernel(gegl_cl_get_command_queue(), cl_data->kernel[0], 2, NULL, global_ws, NULL, 0, NULL, NULL);
+        CL_CHECK;
+        cl_err = gegl_clFinish(gegl_cl_get_command_queue());
+        CL_CHECK;
+        return TRUE;
+    }
+error:
+    return FALSE;
 }
 
 #endif
